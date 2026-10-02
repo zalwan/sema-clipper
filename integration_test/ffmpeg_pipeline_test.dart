@@ -1,13 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
-import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
-import 'package:ffmpeg_kit_flutter_new/return_code.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:sema_clipper/features/clipper/clip_processor.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -27,54 +24,19 @@ void main() {
     final input = await File(
       '${directory.path}/landscape.mp4',
     ).writeAsBytes(base64Decode(encodedVideo));
-    final font = File('${directory.path}/DejaVuSans.ttf');
-    final fontBytes = await rootBundle.load('assets/fonts/DejaVuSans.ttf');
-    await font.writeAsBytes(
-      Uint8List.sublistView(fontBytes),
-      flush: true,
-    );
     final output = File('${directory.path}/vertical-captioned.mp4');
 
-    final filter =
-        'scale=-2:1920,crop=1080:1920:(iw-1080)/2:0,'
-        'drawtext=fontfile=${font.path}:text=SEMA pipeline:'
-        'fontcolor=white:fontsize=64:borderw=4:bordercolor=black:'
-        'x=(w-text_w)/2:y=h*2/3';
-    final session = await FFmpegKit.executeWithArguments([
-      '-y',
-      '-ss',
-      '0.5',
-      '-i',
-      input.path,
-      '-t',
-      '2',
-      '-map',
-      '0:v:0',
-      '-map',
-      '0:a?',
-      '-vf',
-      filter,
-      '-c:v',
-      'libx264',
-      '-preset',
-      'ultrafast',
-      '-crf',
-      '28',
-      '-pix_fmt',
-      'yuv420p',
-      '-c:a',
-      'aac',
-      '-movflags',
-      '+faststart',
-      output.path,
-    ]);
-    final returnCode = await session.getReturnCode();
-    final logs = await session.getAllLogsAsString();
-    expect(
-      ReturnCode.isSuccess(returnCode),
-      isTrue,
-      reason: 'FFmpeg failed (rc=$returnCode): $logs',
+    final result = await ClipProcessor().process(
+      ClipProcessRequest(
+        sourcePath: input.path,
+        sourceDuration: const Duration(seconds: 4),
+        start: const Duration(milliseconds: 500),
+        end: const Duration(milliseconds: 2500),
+        caption: "SEMA: it's 100% ready",
+        outputPath: output.path,
+      ),
     );
+    expect(result, ClipProcessSuccess(output.path));
     expect(output.existsSync(), isTrue);
     expect(output.lengthSync(), greaterThan(1000));
 
