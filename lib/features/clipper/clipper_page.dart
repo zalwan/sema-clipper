@@ -5,13 +5,18 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import 'clip_export_actions.dart';
+import 'clip_processor.dart';
 import 'format_duration.dart';
 import 'widgets/clip_range_selector.dart';
 import 'widgets/empty_video_state.dart';
 import 'widgets/video_preview.dart';
 
 class ClipperPage extends StatefulWidget {
-  const ClipperPage({super.key});
+  const ClipperPage({this.processor, this.actions, super.key});
+
+  final ClipProcessing? processor;
+  final ClipExportActions? actions;
 
   @override
   State<ClipperPage> createState() => _ClipperPageState();
@@ -19,11 +24,19 @@ class ClipperPage extends StatefulWidget {
 
 class _ClipperPageState extends State<ClipperPage> {
   VideoPlayerController? _controller;
+  VideoPlayerController? _outputController;
+  late final ClipProcessing _processor;
+  late final ClipExportActions _actions;
+  final _captionController = TextEditingController();
   String? _videoPath;
   String? _videoName;
+  String? _outputPath;
   String? _errorMessage;
+  String? _noticeMessage;
   bool _isChoosing = false;
   bool _isLoading = false;
+  bool _isProcessing = false;
+  bool _isSaving = false;
   RangeValues _clipRange = const RangeValues(0, 0);
 
   static const _maximumClipDuration = Duration(seconds: 60);
@@ -33,8 +46,15 @@ class _ClipperPageState extends State<ClipperPage> {
       'Could not load this video. It may be damaged or use an unsupported '
       'format. Try another video, such as an MP4.';
 
+  @override
+  void initState() {
+    super.initState();
+    _processor = widget.processor ?? ClipProcessor();
+    _actions = widget.actions ?? DeviceClipExportActions();
+  }
+
   Future<void> _chooseVideo() async {
-    if (_isChoosing) return;
+    if (_isChoosing || _isProcessing) return;
     setState(() => _isChoosing = true);
     try {
       await _controller?.pause();
@@ -51,13 +71,16 @@ class _ClipperPageState extends State<ClipperPage> {
         return;
       }
 
+      _releaseOutput();
       _releaseVideo();
+      _captionController.clear();
       final controller = VideoPlayerController.file(File(path));
       setState(() {
         _controller = controller;
         _videoPath = path;
         _videoName = file.name;
         _errorMessage = null;
+        _noticeMessage = null;
         _isLoading = true;
       });
 
@@ -124,6 +147,22 @@ class _ClipperPageState extends State<ClipperPage> {
     }
   }
 
+  Future<void> _toggleOutputPlayback() async {
+    final controller = _outputController;
+    if (controller == null) return;
+    try {
+      if (controller.value.isPlaying) {
+        await controller.pause();
+      } else {
+        await controller.play();
+      }
+    } catch (_) {
+      if (!mounted || _outputController != controller) return;
+      _releaseOutput();
+      setState(() => _errorMessage = 'Could not play the exported clip.');
+    }
+  }
+
   void _updateClipRange(RangeValues proposed) {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
@@ -159,6 +198,126 @@ class _ClipperPageState extends State<ClipperPage> {
     unawaited(controller.seekTo(Duration(milliseconds: seekPosition.round())));
   }
 
+  Future<void> _exportClip() async {
+    final sourceController = _controller;
+    final sourcePath = _videoPath;
+    if (_isProcessing || sourceController == null || sourcePath == null) return;
+
+    await sourceController.pause();
+    _releaseOutput();
+    final outputPath =
+        '${Directory.systemTemp.path}/sema-clip-${DateTime.now().microsecondsSinceEpoch}.mp4';
+    if (!mounted) return;
+
+    setState(() {
+      _isProcessing = true;
+      _errorMessage = null;
+      _noticeMessage = null;
+    });
+
+    final result = await _processor.process(
+      ClipProcessRequest(
+        sourcePath: sourcePath,
+        sourceDuration: sourceController.value.duration,
+        start: Duration(milliseconds: _clipRange.start.round()),
+        end: Duration(milliseconds: _clipRange.end.round()),
+        caption: _captionController.text,
+        outputPath: outputPath,
+      ),
+    );
+    if (!mounted) {
+      await _deleteOutputFile(outputPath);
+      return;
+    }
+
+    if (result case ClipProcessSuccess(:final path)) {
+      final outputController = VideoPlayerController.file(File(path));
+      try {
+        await outputController.initialize().timeout(
+          const Duration(seconds: 30),
+        );
+        if (!mounted) {
+          await outputController.dispose();
+          await _deleteOutputFile(outputPath);
+          return;
+        }
+        setState(() {
+          _outputController = outputController;
+          _outputPath = path;
+          _isProcessing = false;
+          _noticeMessage = null;
+        });
+      } catch (_) {
+        await outputController.dispose();
+        await _deleteOutputFile(outputPath);
+        setState(() {
+          _isProcessing = false;
+          _errorMessage = 'The clip was created but could not be previewed.';
+        });
+      }
+      return;
+    }
+
+    final error = (result as ClipProcessFailure).error;
+    setState(() {
+      _isProcessing = false;
+      _errorMessage = switch (error) {
+        ClipProcessError.invalidRange =>
+          'Choose a clip between 1 and 60 seconds.',
+        ClipProcessError.invalidCaption =>
+          'Enter one caption of up to $maximumCaptionLength characters.',
+        ClipProcessError.noSpace =>
+          'There is not enough storage. Please free up some space and try again.',
+        ClipProcessError.cancelled => 'Export cancelled.',
+        ClipProcessError.processingFailed =>
+          'Could not create this clip. Try a different video or shorter range.',
+      };
+    });
+  }
+
+  Future<void> _cancelExport() async {
+    if (!_isProcessing) return;
+    await _processor.cancel();
+  }
+
+  Future<void> _saveOutput() async {
+    final path = _outputPath;
+    if (path == null || _isSaving) return;
+    setState(() {
+      _isSaving = true;
+      _errorMessage = null;
+    });
+    try {
+      final saved = await _actions.saveToGallery(path);
+      if (!mounted) return;
+      setState(() {
+        _noticeMessage = saved ? 'Saved to your gallery.' : null;
+        _errorMessage = saved
+            ? null
+            : 'Could not save to the gallery. You can still use Share.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage =
+            'Could not save to the gallery. You can still use Share.';
+      });
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _shareOutput() async {
+    final path = _outputPath;
+    if (path == null) return;
+    try {
+      await _actions.share(path);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'Could not open the share sheet.');
+    }
+  }
+
   void _releaseVideo() {
     final controller = _controller;
     _controller = null;
@@ -168,6 +327,26 @@ class _ClipperPageState extends State<ClipperPage> {
     if (controller != null) {
       controller.removeListener(_handleVideoError);
       unawaited(_disposeController(controller));
+    }
+  }
+
+  void _releaseOutput() {
+    final controller = _outputController;
+    final path = _outputPath;
+    _outputController = null;
+    _outputPath = null;
+    if (controller != null) unawaited(_disposeController(controller));
+    if (path != null) {
+      unawaited(_deleteOutputFile(path));
+    }
+  }
+
+  Future<void> _deleteOutputFile(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // Temporary output cleanup is best-effort.
     }
   }
 
@@ -181,6 +360,9 @@ class _ClipperPageState extends State<ClipperPage> {
 
   @override
   void dispose() {
+    if (_isProcessing) unawaited(_processor.cancel());
+    _captionController.dispose();
+    _releaseOutput();
     _releaseVideo();
     super.dispose();
   }
@@ -189,6 +371,7 @@ class _ClipperPageState extends State<ClipperPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final controller = _controller;
+    final outputController = _outputController;
     final ready =
         controller != null && controller.value.isInitialized && !_isLoading;
 
@@ -262,8 +445,90 @@ class _ClipperPageState extends State<ClipperPage> {
                     values: _clipRange,
                     onChanged: _updateClipRange,
                   ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    controller: _captionController,
+                    maxLength: maximumCaptionLength,
+                    maxLines: 1,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      labelText: 'Caption',
+                      hintText: 'Add one line to your clip',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_isProcessing) ...[
+                    const LinearProgressIndicator(),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Creating your vertical clip…',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: _cancelExport,
+                      child: const Text('Cancel export'),
+                    ),
+                  ] else
+                    FilledButton.icon(
+                      onPressed: _exportClip,
+                      icon: const Icon(Icons.movie_creation_outlined),
+                      label: const Text('Export clip'),
+                    ),
+                  if (outputController != null &&
+                      outputController.value.isInitialized) ...[
+                    const SizedBox(height: 32),
+                    Text(
+                      'Your clip is ready',
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    VideoPreview(
+                      key: ValueKey(_outputPath),
+                      controller: outputController,
+                      onTogglePlayback: _toggleOutputPlayback,
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _isSaving ? null : _saveOutput,
+                            icon: const Icon(Icons.download_outlined),
+                            label: Text(
+                              _isSaving ? 'Saving…' : 'Save to gallery',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: _shareOutput,
+                            icon: const Icon(Icons.share_outlined),
+                            label: const Text('Share'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ] else
                   const EmptyVideoState(),
+                if (_noticeMessage != null) ...[
+                  const SizedBox(height: 20),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      _noticeMessage!,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
                 if (_errorMessage != null) ...[
                   const SizedBox(height: 20),
                   Semantics(
@@ -285,7 +550,7 @@ class _ClipperPageState extends State<ClipperPage> {
                 ],
                 const SizedBox(height: 24),
                 FilledButton.icon(
-                  onPressed: _isChoosing ? null : _chooseVideo,
+                  onPressed: _isChoosing || _isProcessing ? null : _chooseVideo,
                   icon: Icon(ready ? Icons.swap_horiz : Icons.add),
                   label: Text(
                     _isChoosing

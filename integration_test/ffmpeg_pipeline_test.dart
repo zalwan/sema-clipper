@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:sema_clipper/features/clipper/clip_export_actions.dart';
 import 'package:sema_clipper/features/clipper/clip_processor.dart';
 
 void main() {
@@ -50,5 +51,8 @@ void main() {
     expect(video.getWidth(), 1080);
     expect(video.getHeight(), 1920);
     expect(double.parse(information.getDuration()!), closeTo(2, 0.5));
+
+    final saved = await DeviceClipExportActions().saveToGallery(output.path);
+    expect(saved, isTrue);
   });
 }

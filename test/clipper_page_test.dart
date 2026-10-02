@@ -4,6 +4,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sema_clipper/features/clipper/clip_export_actions.dart';
+import 'package:sema_clipper/features/clipper/clip_processor.dart';
+import 'package:sema_clipper/features/clipper/clipper_page.dart';
 import 'package:sema_clipper/main.dart' as app;
 import 'package:video_player/video_player.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
@@ -30,9 +33,35 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> launchWithExports(
+    WidgetTester tester, {
+    required ClipProcessing processor,
+    required ClipExportActions actions,
+  }) async {
+    tester.view.physicalSize = const Size(430, 932);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ClipperPage(processor: processor, actions: actions),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> scrollTo(WidgetTester tester, Finder target) async {
+    await tester.scrollUntilVisible(
+      target,
+      150,
+      scrollable: find.byType(Scrollable).at(0),
+    );
+    await tester.pump();
+  }
+
   Future<void> choose(WidgetTester tester, {bool change = false}) async {
     final button = find.text(change ? 'Change video' : 'Choose video');
-    await tester.scrollUntilVisible(button, 150);
+    await scrollTo(tester, button);
     await tester.pump();
     await tester.tap(button);
     await tester.pump();
@@ -154,6 +183,118 @@ void main() {
     expect(find.text('Start\n00:51'), findsOneWidget);
     expect(find.text('End\n00:52'), findsOneWidget);
     expect(find.text('Clip duration: 00:01'), findsOneWidget);
+  });
+
+  testWidgets('loaded video accepts one caption and starts export', (
+    tester,
+  ) async {
+    final processor = FakeClipProcessor();
+    final actions = FakeClipExportActions();
+    await launchWithExports(tester, processor: processor, actions: actions);
+    await load(tester);
+
+    final caption = find.byType(TextField).at(0);
+    await scrollTo(tester, caption);
+    await tester.enterText(caption, 'My SEMA moment');
+    final export = find.widgetWithText(FilledButton, 'Export clip');
+    await scrollTo(tester, export);
+    tester.widget<FilledButton>(export).onPressed!();
+    await tester.pump();
+    await tester.pump();
+
+    expect(processor.request, isNotNull);
+    expect(processor.request!.start, Duration.zero);
+    expect(processor.request!.end, const Duration(seconds: 60));
+    expect(processor.request!.caption, 'My SEMA moment');
+    expect(find.text('Creating your vertical clip…'), findsOneWidget);
+    expect(find.text('Cancel export'), findsOneWidget);
+  });
+
+  testWidgets('successful export previews vertical result and offers actions', (
+    tester,
+  ) async {
+    final processor = FakeClipProcessor();
+    final actions = FakeClipExportActions();
+    await launchWithExports(tester, processor: processor, actions: actions);
+    await load(tester);
+    await tester.enterText(find.byType(TextField).at(0), 'A caption');
+    final export = find.widgetWithText(FilledButton, 'Export clip');
+    await scrollTo(tester, export);
+    tester.widget<FilledButton>(export).onPressed!();
+    await tester.pump();
+    await tester.pump();
+
+    processor.complete(const ClipProcessSuccess('/local/export.mp4'));
+    await tester.pump();
+    videos.initialize(
+      2,
+      duration: const Duration(seconds: 60),
+      size: const Size(1080, 1920),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Your clip is ready'), findsOneWidget);
+    expect(find.byType(VideoPlayer), findsNWidgets(2));
+
+    final save = find.text('Save to gallery');
+    await scrollTo(tester, save);
+    expect(save, findsOneWidget);
+    expect(find.text('Share'), findsOneWidget);
+    await tester.tap(save);
+    await tester.pump();
+    expect(actions.savedPath, '/local/export.mp4');
+
+    await tester.tap(find.text('Share'));
+    await tester.pump();
+    expect(actions.sharedPath, '/local/export.mp4');
+  });
+
+  testWidgets('export can be cancelled and reports cancellation', (
+    tester,
+  ) async {
+    final processor = FakeClipProcessor();
+    await launchWithExports(
+      tester,
+      processor: processor,
+      actions: FakeClipExportActions(),
+    );
+    await load(tester);
+    await tester.enterText(find.byType(TextField).at(0), 'A caption');
+    final export = find.widgetWithText(FilledButton, 'Export clip');
+    await scrollTo(tester, export);
+    tester.widget<FilledButton>(export).onPressed!();
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.text('Cancel export'));
+    processor.complete(const ClipProcessFailure(ClipProcessError.cancelled));
+    await tester.pumpAndSettle();
+
+    expect(processor.cancelled, isTrue);
+    expect(find.text('Export cancelled.'), findsOneWidget);
+  });
+
+  testWidgets('no-space failure is shown without native details', (
+    tester,
+  ) async {
+    final processor = FakeClipProcessor();
+    await launchWithExports(
+      tester,
+      processor: processor,
+      actions: FakeClipExportActions(),
+    );
+    await load(tester);
+    await tester.enterText(find.byType(TextField).at(0), 'A caption');
+    final export = find.widgetWithText(FilledButton, 'Export clip');
+    await scrollTo(tester, export);
+    tester.widget<FilledButton>(export).onPressed!();
+    await tester.pump();
+    await tester.pump();
+
+    processor.complete(const ClipProcessFailure(ClipProcessError.noSpace));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('free up some space'), findsOneWidget);
   });
 
   testWidgets('cancel while changing preserves the paused preview', (
@@ -289,4 +430,35 @@ void main() {
     expect(videos.disposed, [1]);
     expect(find.text('Choose video'), findsOneWidget);
   });
+}
+
+class FakeClipProcessor implements ClipProcessing {
+  final _result = Completer<ClipProcessResult>();
+  ClipProcessRequest? request;
+  bool cancelled = false;
+
+  @override
+  Future<ClipProcessResult> process(ClipProcessRequest request) {
+    this.request = request;
+    return _result.future;
+  }
+
+  void complete(ClipProcessResult result) => _result.complete(result);
+
+  @override
+  Future<void> cancel() async => cancelled = true;
+}
+
+class FakeClipExportActions implements ClipExportActions {
+  String? savedPath;
+  String? sharedPath;
+
+  @override
+  Future<bool> saveToGallery(String path) async {
+    savedPath = path;
+    return true;
+  }
+
+  @override
+  Future<void> share(String path) async => sharedPath = path;
 }

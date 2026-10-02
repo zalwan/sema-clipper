@@ -47,7 +47,8 @@ void main() {
 
     Future<void> tapButton(String label) async {
       final button = find.text(label);
-      await tester.scrollUntilVisible(button, 150);
+      final pageScroll = find.byType(Scrollable).at(0);
+      await tester.scrollUntilVisible(button, 150, scrollable: pageScroll);
       await tester.pump();
       await tester.tap(button);
     }

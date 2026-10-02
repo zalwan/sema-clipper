@@ -138,6 +138,12 @@ final class FfmpegKitCommandRunner implements ClipCommandRunner {
   Future<void> cancel() async => _activeSession?.cancel();
 }
 
+abstract interface class ClipProcessing {
+  Future<ClipProcessResult> process(ClipProcessRequest request);
+
+  Future<void> cancel();
+}
+
 ClipProcessError? validateClipRequest(ClipProcessRequest request) {
   final clipDuration = request.end - request.start;
   if (request.sourcePath.trim().isEmpty ||
@@ -226,7 +232,7 @@ List<String> buildClipCommand(
 
 typedef FontFileFactory = Future<File> Function();
 
-final class ClipProcessor {
+final class ClipProcessor implements ClipProcessing {
   ClipProcessor({ClipCommandRunner? runner, FontFileFactory? createFontFile})
     : _runner = runner ?? FfmpegKitCommandRunner(),
       _createFontFile = createFontFile ?? _writeBundledFont;
@@ -234,6 +240,7 @@ final class ClipProcessor {
   final ClipCommandRunner _runner;
   final FontFileFactory _createFontFile;
 
+  @override
   Future<ClipProcessResult> process(ClipProcessRequest request) async {
     final validationError = validateClipRequest(request);
     if (validationError != null) return ClipProcessFailure(validationError);
@@ -276,6 +283,7 @@ final class ClipProcessor {
     }
   }
 
+  @override
   Future<void> cancel() => _runner.cancel();
 
   static Future<File> _writeBundledFont() async {

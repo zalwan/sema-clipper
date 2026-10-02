@@ -62,12 +62,16 @@ class FakeVideoPlatform extends VideoPlayerPlatform {
     return id;
   }
 
-  void initialize(int id, {Duration duration = const Duration(seconds: 84)}) {
+  void initialize(
+    int id, {
+    Duration duration = const Duration(seconds: 84),
+    Size size = const Size(1920, 1080),
+  }) {
     events[id]!.add(
       VideoEvent(
         eventType: VideoEventType.initialized,
         duration: duration,
-        size: const Size(1920, 1080),
+        size: size,
       ),
     );
   }
