@@ -1,87 +1,129 @@
-# SEMA Clipper — video selection and clip range
+# SEMA Clipper
 
-An Android Flutter prototype for **Choose video → preview → select a clip range**. Everything operates on the selected local file; there is no upload, backend, authentication or persistence.
+## What it does
 
-## Run
+SEMA Clipper is an Android Flutter prototype that picks a local video, previews it, selects a 1–60 second range, burns in one caption line, and exports a 1080×1920 MP4. Landscape input is scaled to fill the vertical frame and center-cropped. The result can be previewed, saved to the gallery, or sent to Android's share sheet.
 
-Developed with Flutter **3.44.4**, Dart **3.12.2**, Java 21 and an Android SDK with accepted licenses. Use an Android device/emulator; this project does not configure web or desktop targets.
+There is no backend, account, analytics, or upload.
+
+## How to run
+
+The project was developed with Flutter 3.44.4, Dart 3.12.2, Java 21, and an Android SDK. Run these commands from this repository root:
 
 ```sh
-cd sema_clipper
 flutter pub get
 flutter devices
 flutter run -d <android-device-id>
 ```
 
-Choose a locally stored landscape video, wait for its preview, then tap play/pause. Use the range slider to choose the clip's start and end; moving either handle pauses and seeks the preview to that boundary. **Change video** opens the picker again. Canceling retains the previous preview, paused. An unsupported, corrupt or inaccessible file produces a readable error and lets you choose again.
+Choose a landscape video already stored on the device, set both range handles, type a caption of at most 80 characters, and tap **Export clip**. Export remains in the foreground; it can be cancelled while FFmpeg is running.
 
-Source videos may be any length. The selected clip defaults to the first 60 seconds, or the full source when it is shorter, and is constrained to 1–60 seconds. Duration shows the full source length (`mm:ss`, or `h:mm:ss` for an hour or more). Portrait sources also preserve their original aspect ratio.
+## Where processing runs and why
 
-## Small project structure
+All decoding, trimming, cropping, caption rendering, and encoding happen on the Android device with FFmpeg. This keeps the flow offline, avoids server and upload costs, avoids sending a private source video elsewhere, and removes the wait for a large upload. The cost is a much larger app binary, CPU and battery use during export, and performance and codec differences between phones.
 
-| Files | Responsibility |
-|---|---|
-| `lib/main.dart`, `lib/app/app.dart` | Entry point and Material app |
-| `lib/core/theme/app_theme.dart` | Colors and button styling |
-| `lib/features/clipper/clipper_page.dart` | Picker, selected path, loading/error state and player ownership |
-| `lib/features/clipper/widgets/empty_video_state.dart` | Initial guidance |
-| `lib/features/clipper/widgets/video_preview.dart` | Natural-ratio video, play/pause and playback position |
-| `lib/features/clipper/widgets/clip_range_selector.dart` | Start/end slider, boundary labels and selected duration |
-| `lib/features/clipper/format_duration.dart` | Duration display logic |
-| `test/` | Duration and widget behavior tests with native-platform fakes |
-| `integration_test/`, `test_driver/` | Real Android decoder smoke test and screenshot capture |
-| `android/` | Generated Android host, app label and take-home signing configuration |
+The verified pipeline uses `ffmpeg_kit_flutter_new`, a maintained FFmpeg Kit fork with FFmpeg 8.1.2 and its full-GPL Android build. It provides libx264, AAC, drawtext/libfreetype, scaling, and cropping in one package. The generated video uses H.264, optional AAC audio, `yuv420p`, and fast-start metadata. Because this dependency is GPL, licensing must be reviewed before distributing the app.
 
-A single `StatefulWidget` owns the video controller. Selection is serialized, cancellation preserves the prior video, and replacement/page teardown dispose it. A pending picker result is ignored after unmount. Decoder initialization has a 30-second timeout and playback errors return to a recoverable state. Flutter's video player handles normal app-background playback lifecycle. There are no state-management or repository abstractions.
+## Architecture
+
+- `ClipperPage` owns the single-screen UI, source and result video controllers, range state, caption, and export state.
+- `ClipRangeSelector` clamps the chosen interval to 1–60 seconds and seeks the source preview to a moved boundary.
+- `ClipProcessor` validates input and builds the FFmpeg command without depending on widgets.
+- `FfmpegKitCommandRunner` is the small native processing boundary and supports cancellation.
+- `DeviceClipExportActions` saves through Android MediaStore or opens the platform share sheet.
+- A bundled DejaVu Sans font makes drawtext output independent of fonts installed on the phone.
+- Unit and widget tests replace native boundaries; integration tests exercise Android decoding, FFmpeg, probing, and MediaStore.
 
 ## Dependencies
 
-- `file_picker ^13.1.0`: single-video selection through the system picker, using `FilePicker.pickFile(type: FileType.video)`. It supplies the cached local path; the app never reads the entire video into Dart memory.
-- `video_player ^2.14.0`: native decoding, metadata, preview and playback control. Format/codec support depends on the Android device.
-- Test only: `flutter_test`, `integration_test` (Flutter SDK), `video_player_platform_interface` for faking the native playback boundary. `flutter_lints` supplies static-analysis rules.
+- [`file_picker`](https://pub.dev/packages/file_picker) opens the Android system picker and returns a local file path.
+- [`video_player`](https://pub.dev/packages/video_player) provides native source and result playback.
+- [`ffmpeg_kit_flutter_new`](https://pub.dev/packages/ffmpeg_kit_flutter_new) performs the on-device trim, crop, caption, and encode pipeline.
+- [`saver_gallery`](https://pub.dev/packages/saver_gallery) inserts the result through MediaStore on Android 10+ without broad storage permission.
+- [`share_plus`](https://pub.dev/packages/share_plus) opens the native share sheet with the exported MP4.
 
-The lockfile is included for reproducible package resolution. Package references: [file_picker](https://pub.dev/packages/file_picker), [video_player](https://pub.dev/packages/video_player).
+The remaining packages are Flutter SDK test support, the video player platform interface used by fakes, and lint rules. `pubspec.lock` is committed for reproducible resolution.
 
-## Validation
+## Verification
+
+Run the static, unit/widget, and APK checks:
 
 ```sh
 flutter analyze
 flutter test
 flutter build apk --debug
-flutter run -d emulator-5554 --debug --no-resident
 ```
 
-For the Android decoder test (Linux shell; on macOS replace `base64 -w0 file` with `base64 < file | tr -d '\n'`):
+Run the native decoder UI smoke test:
 
 ```sh
-flutter drive -d emulator-5554 \
+flutter drive -d <android-device-id> \
   --driver=test_driver/integration_test.dart \
   --target=integration_test/video_smoke_test.dart \
   --dart-define=SMOKE_VIDEO_BASE64="$(base64 -w0 integration_test/fixtures/landscape.mp4)"
 ```
 
-The integration test substitutes **only the picker result** with a generated local file. It uses the real Android video player for initialization, dimensions, duration, play/pause, cancellation, corrupt-file recovery and replacement. Screenshots are written under `build/screenshots/`. This does **not** automate choosing a file inside Android's native picker; that needs the manual check below.
+Run the real processing and MediaStore test:
 
-The preview foundation was validated on 29 September 2026 with the Pixel 8 / Android API 37 emulator and a native decoder smoke test. The range-selection slice was validated on 2 October 2026: `flutter analyze` passed, all **17** unit/widget tests passed, and the debug APK built. No physical-phone or native-picker end-to-end check has been performed.
+```sh
+flutter drive -d <android-device-id> \
+  --driver=test_driver/integration_test.dart \
+  --target=integration_test/ffmpeg_pipeline_test.dart \
+  --dart-define=SMOKE_VIDEO_BASE64="$(base64 -w0 integration_test/fixtures/landscape.mp4)"
+```
 
-### Manual device check
+On macOS, replace `base64 -w0 file` with `base64 < file | tr -d '\\n'`.
 
-1. Put an ordinary landscape MP4 on the device; include a source longer than 60 seconds.
-2. Open Choose video, select it in the native picker and check the source and default clip durations.
-3. Move both clip handles, confirm the preview seeks to each boundary, then play/pause. Background and return to the app. Confirm video is not stretched in either orientation.
-4. Open Change video and cancel; then select a second file. Confirm the old video stops and duration changes.
-5. Try a corrupt or unsupported local file, then recover by choosing the valid MP4 again.
-6. Repeat on a physical Android phone, including a large video and an actual gallery/document provider.
+On 2 October 2026, `flutter analyze`, all 31 unit/widget tests, and `flutter build apk --debug` passed. A Pixel 8 Android API 37 x86_64 emulator decoded the fixture and ran the production processor. FFprobe confirmed H.264, 1080×1920, and a duration within 0.5 seconds of the requested two seconds; MediaStore also reported a successful save. The system picker, native share destination, and full workflow have not yet been tested on a physical phone.
 
-## Android considerations and limits
+## Trade-offs and known limitations
 
-- Minimum Android API comes from the Flutter template (API 24 with the validated SDK). No broad storage/media, camera or microphone permission is requested by app code; file access comes through the system picker.
-- Debug/profile manifests retain Flutter's INTERNET permission for the debugger. The main manifest adds no network permission and the app makes no network requests. Native video dependencies contribute normal permissions such as network-state and wake-lock permissions during manifest merging.
-- The system picker may expose cloud providers; choose a video already on the phone for an offline demo. A provider that cannot produce a local path gets a clear retry message.
-- Selected paths may refer to plugin-managed cache. No persistent URI grants or saved sessions are implemented. Do not treat these paths as durable across restarts/cache cleanup.
-- Release builds currently use the debug signing key for this take-home prototype. A unique application ID and release signing setup are needed before distribution.
-- The range UI records start and end positions but does not render a trimmed output yet. Caption, 9:16 conversion, FFmpeg, export and the share sheet remain unimplemented.
+- Center-cropping fills 9:16 but removes content from the left and right of landscape footage.
+- Export is foreground-only and has indeterminate progress. Leaving or killing the app interrupts it.
+- The `ultrafast` H.264 preset reduces export time at the cost of larger files; a universal debug APK is also large because it contains FFmpeg native libraries for multiple ABIs.
+- Caption styling is fixed, single-line, and limited to 80 characters. Newlines are removed and drawtext control characters are escaped.
+- Source codec support and export speed vary by device. 1080×1920 software encoding can be slow or hot on older phones.
+- Gallery saving is designed and emulator-tested for Android 10+ scoped storage. Older Android releases have not been validated and the app intentionally requests no broad storage permission.
+- Share-sheet launch is wired through `share_plus`, but choosing and completing a destination remains a manual platform flow.
+- A chosen file may be a picker-managed cache path and is not retained as a durable project after restart.
+- The Android application ID and release signing still use take-home defaults. Configure both before distribution.
+- The FFmpeg plugin currently emits a Flutter warning about its Kotlin Gradle plugin application style, so future Flutter compatibility should be monitored.
 
-## Next processing step
+## Next steps
 
-Next, separately prove a maintained, Android-compatible FFmpeg integration on real devices with a tiny local fixture: selected range → defined 9:16 crop/pad policy → escaped single-line caption → local output. Confirm codec availability, binary licensing, Android ABI/16 KB page support, cancellation and cleanup before connecting that pipeline to this screen. Export and sharing follow successful output verification.
+- Offer a blurred-background pad mode so the full landscape frame remains visible.
+- Add server-side rendering as an opt-in path for weak devices.
+- Move long exports to an Android foreground/background worker with resumable progress.
+- Support multi-line captions, style choices, placement, and safe-area controls.
+- Add an iOS implementation and device test matrix.
+- Persist jobs so interrupted exports can resume.
+
+## How I used AI tools
+
+Codex was used to audit the existing repository, research the maintained FFmpeg option, scaffold the processor and UI changes, write unit/widget/integration tests, debug emulator failures, and draft this README. The generated work was reviewed in this session against the assignment: package documentation and licensing, FFmpeg arguments and escaping, Android permissions, the resulting diffs, and each test assertion were inspected. Codex also ran the local verification commands and examined the real output with FFprobe. No manual edits or physical-phone checks by the submitter are claimed; those checks are listed below so the final recording can be based on personally verified behavior.
+
+## Demo script (2–3 minutes)
+
+1. Open SEMA Clipper and choose a landscape MP4 from the Android picker.
+2. Play the source briefly, move both range handles, and point out the duration is capped at 60 seconds.
+3. Enter a short caption and tap **Export clip**; show the cancellable processing state.
+4. Play the exported result and show its vertical 9:16 frame and burned-in caption.
+5. Tap **Save to gallery**, open the saved video, and confirm playback.
+6. Return to the app, tap **Share**, and show the native share sheet without sending it.
+
+## Physical-phone checklist before recording
+
+1. Connect an Android 10+ phone with USB debugging enabled and confirm it appears in `flutter devices`.
+2. Run `flutter run -d <phone-id>` from the repository root.
+3. Copy a normal landscape MP4 with audio to the phone; use a file longer than 60 seconds if possible.
+4. Pick it through the real system picker. Confirm the preview, source duration, play/pause, orientation changes, and return from background all behave normally.
+5. Move the start and end handles. Confirm the preview seeks to each boundary and the selected duration never exceeds 60 seconds.
+6. Enter text containing `:`, `'`, `\\`, and `%`; export a short clip and confirm the caption renders as one readable line near the lower third.
+7. Play the result. Confirm it is 9:16, not stretched, has the expected start/end content, and retains audio.
+8. Start another export and cancel it. Confirm the UI returns to a usable state and no partial result is offered.
+9. Save a successful result. Open the Gallery/Photos app, find the **SEMA Clipper** video, and play it with audio.
+10. Tap **Share**, choose one installed target, and confirm that target receives a playable MP4. Avoid sending private footage during the test.
+11. Try a silent source and one other phone-recorded codec. Confirm export succeeds or the app shows a readable processing error.
+12. Change video, cancel the picker once, then choose another video. Also try an invalid/corrupt file and confirm recovery works.
+13. Check free storage before a longer export and verify the no-space message on a storage-constrained test device if one is available.
+14. Repeat the exact flow intended for the recording once without developer intervention, then record the demo.

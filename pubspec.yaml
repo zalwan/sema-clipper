@@ -1,7 +1,7 @@
 name: sema_clipper
-description: "Local video selection and preview for a SEMA clipper prototype."
+description: "On-device vertical video clipping and captioning for Android."
 publish_to: 'none'
-version: 0.2.0+2
+version: 0.3.0+3
 
 environment:
   sdk: ^3.12.2
