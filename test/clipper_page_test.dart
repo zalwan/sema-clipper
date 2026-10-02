@@ -94,6 +94,68 @@ void main() {
     },
   );
 
+  testWidgets('long video starts with a 60 second clip range', (tester) async {
+    await launch(tester);
+    await load(tester);
+
+    expect(find.text('Choose your moment'), findsOneWidget);
+    expect(find.text('Start\n00:00'), findsOneWidget);
+    expect(find.text('End\n01:00'), findsOneWidget);
+    expect(find.text('Clip duration: 01:00'), findsOneWidget);
+    expect(find.byType(RangeSlider), findsOneWidget);
+  });
+
+  testWidgets('short video uses its full duration as the clip range', (
+    tester,
+  ) async {
+    await launch(tester);
+    picker.select = () async => PickedFile('/local/short.mp4');
+    await choose(tester);
+    videos.initialize(1, duration: const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Start\n00:00'), findsOneWidget);
+    expect(find.text('End\n00:05'), findsOneWidget);
+    expect(find.text('Clip duration: 00:05'), findsOneWidget);
+  });
+
+  testWidgets('changing the range seeks and never exceeds 60 seconds', (
+    tester,
+  ) async {
+    await launch(tester);
+    await load(tester);
+
+    var slider = tester.widget<RangeSlider>(find.byType(RangeSlider));
+    slider.onChanged!(const RangeValues(12000, 52000));
+    await tester.pump();
+
+    expect(find.text('Start\n00:12'), findsOneWidget);
+    expect(find.text('End\n00:52'), findsOneWidget);
+    expect(find.text('Clip duration: 00:40'), findsOneWidget);
+    expect(videos.seeks[1], [const Duration(seconds: 12)]);
+
+    slider = tester.widget<RangeSlider>(find.byType(RangeSlider));
+    slider.onChanged!(const RangeValues(12000, 80000));
+    await tester.pump();
+
+    expect(find.text('Start\n00:12'), findsOneWidget);
+    expect(find.text('End\n01:12'), findsOneWidget);
+    expect(find.text('Clip duration: 01:00'), findsOneWidget);
+  });
+
+  testWidgets('clip range cannot collapse to zero duration', (tester) async {
+    await launch(tester);
+    await load(tester);
+
+    final slider = tester.widget<RangeSlider>(find.byType(RangeSlider));
+    slider.onChanged!(const RangeValues(52000, 52000));
+    await tester.pump();
+
+    expect(find.text('Start\n00:51'), findsOneWidget);
+    expect(find.text('End\n00:52'), findsOneWidget);
+    expect(find.text('Clip duration: 00:01'), findsOneWidget);
+  });
+
   testWidgets('cancel while changing preserves the paused preview', (
     tester,
   ) async {

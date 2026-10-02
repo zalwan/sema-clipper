@@ -45,13 +45,20 @@ void main() {
       expect(finder, findsOneWidget);
     }
 
+    Future<void> tapButton(String label) async {
+      final button = find.text(label);
+      await tester.scrollUntilVisible(button, 150);
+      await tester.pump();
+      await tester.tap(button);
+    }
+
     app.main();
     await tester.pumpAndSettle();
     await binding.convertFlutterSurfaceToImage();
     await tester.pumpAndSettle();
     await binding.takeScreenshot('initial');
 
-    await tester.tap(find.text('Choose video'));
+    await tapButton('Choose video');
     await waitFor(find.text('Duration: 00:04'));
     final controller = tester
         .widget<VideoPlayer>(find.byType(VideoPlayer))
@@ -67,21 +74,19 @@ void main() {
     await binding.takeScreenshot('preview');
 
     picker.select = () async => null;
-    await tester.tap(find.text('Change video'));
+    await tapButton('Change video');
     await tester.pumpAndSettle();
     expect(find.text('Duration: 00:04'), findsOneWidget);
 
     picker.select = () async => PickedFile(invalid.path);
-    await tester.tap(find.text('Change video'));
+    await tapButton('Change video');
     await waitFor(find.textContaining('Could not load this video'));
     expect(find.byType(VideoPlayer), findsNothing);
     await tester.pumpAndSettle();
     await binding.takeScreenshot('error');
 
     picker.select = () async => PickedFile(video.path);
-    await tester.scrollUntilVisible(find.text('Choose video'), 150);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Choose video'));
+    await tapButton('Choose video');
     await waitFor(find.text('Duration: 00:04'));
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();

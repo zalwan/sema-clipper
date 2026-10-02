@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import 'format_duration.dart';
+import 'widgets/clip_range_selector.dart';
 import 'widgets/empty_video_state.dart';
 import 'widgets/video_preview.dart';
 
@@ -23,6 +24,10 @@ class _ClipperPageState extends State<ClipperPage> {
   String? _errorMessage;
   bool _isChoosing = false;
   bool _isLoading = false;
+  RangeValues _clipRange = const RangeValues(0, 0);
+
+  static const _maximumClipDuration = Duration(seconds: 60);
+  static const _minimumClipDuration = Duration(seconds: 1);
 
   static const _loadError =
       'Could not load this video. It may be damaged or use an unsupported '
@@ -68,7 +73,15 @@ class _ClipperPageState extends State<ClipperPage> {
           throw const FormatException('No playable video track');
         }
         controller.addListener(_handleVideoError);
-        setState(() => _isLoading = false);
+        setState(() {
+          _clipRange = RangeValues(
+            0,
+            value.duration > _maximumClipDuration
+                ? _maximumClipDuration.inMilliseconds.toDouble()
+                : value.duration.inMilliseconds.toDouble(),
+          );
+          _isLoading = false;
+        });
       } catch (_) {
         if (!mounted || _controller != controller) return;
         _releaseVideo();
@@ -111,11 +124,47 @@ class _ClipperPageState extends State<ClipperPage> {
     }
   }
 
+  void _updateClipRange(RangeValues proposed) {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+
+    final maximum = controller.value.duration.inMilliseconds.toDouble();
+    var start = proposed.start.clamp(0.0, maximum);
+    var end = proposed.end.clamp(0.0, maximum);
+    final movedStart = (start - _clipRange.start).abs();
+    final movedEnd = (end - _clipRange.end).abs();
+    final maximumLength = _maximumClipDuration.inMilliseconds.toDouble();
+    final minimumLength = _minimumClipDuration.inMilliseconds
+        .clamp(0, maximum)
+        .toDouble();
+
+    if (end - start > maximumLength) {
+      if (movedStart >= movedEnd) {
+        start = (end - maximumLength).clamp(0.0, maximum);
+      } else {
+        end = (start + maximumLength).clamp(0.0, maximum);
+      }
+    }
+    if (end - start < minimumLength) {
+      if (movedStart >= movedEnd) {
+        start = (end - minimumLength).clamp(0.0, maximum);
+      } else {
+        end = (start + minimumLength).clamp(0.0, maximum);
+      }
+    }
+
+    final seekPosition = movedStart >= movedEnd ? start : end;
+    setState(() => _clipRange = RangeValues(start, end));
+    unawaited(controller.pause());
+    unawaited(controller.seekTo(Duration(milliseconds: seekPosition.round())));
+  }
+
   void _releaseVideo() {
     final controller = _controller;
     _controller = null;
     _videoPath = null;
     _videoName = null;
+    _clipRange = const RangeValues(0, 0);
     if (controller != null) {
       controller.removeListener(_handleVideoError);
       unawaited(_disposeController(controller));
@@ -206,6 +255,12 @@ class _ClipperPageState extends State<ClipperPage> {
                   Text(
                     'Duration: ${formatDuration(controller.value.duration)}',
                     style: theme.textTheme.bodyLarge,
+                  ),
+                  const SizedBox(height: 20),
+                  ClipRangeSelector(
+                    sourceDuration: controller.value.duration,
+                    values: _clipRange,
+                    onChanged: _updateClipRange,
                   ),
                 ] else
                   const EmptyVideoState(),

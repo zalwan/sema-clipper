@@ -1,6 +1,6 @@
-# SEMA Clipper — video preview foundation
+# SEMA Clipper — video selection and clip range
 
-An Android Flutter prototype for **Choose video → load → preview → display duration**. Everything operates on the selected local file; there is no upload, backend, authentication or persistence.
+An Android Flutter prototype for **Choose video → preview → select a clip range**. Everything operates on the selected local file; there is no upload, backend, authentication or persistence.
 
 ## Run
 
@@ -13,9 +13,9 @@ flutter devices
 flutter run -d <android-device-id>
 ```
 
-Choose a locally stored landscape video, wait for its preview, then tap play/pause. **Change video** opens the picker again. Canceling retains the previous preview, paused. An unsupported, corrupt or inaccessible file produces a readable error and lets you choose again.
+Choose a locally stored landscape video, wait for its preview, then tap play/pause. Use the range slider to choose the clip's start and end; moving either handle pauses and seeks the preview to that boundary. **Change video** opens the picker again. Canceling retains the previous preview, paused. An unsupported, corrupt or inaccessible file produces a readable error and lets you choose again.
 
-The source is not limited to 60 seconds in this slice. The initial screen communicates the eventual **clip** limit; actual range selection/enforcement is deferred. Duration shows the full source length (`mm:ss`, or `h:mm:ss` for an hour or more). Portrait sources also preserve their original aspect ratio.
+Source videos may be any length. The selected clip defaults to the first 60 seconds, or the full source when it is shorter, and is constrained to 1–60 seconds. Duration shows the full source length (`mm:ss`, or `h:mm:ss` for an hour or more). Portrait sources also preserve their original aspect ratio.
 
 ## Small project structure
 
@@ -26,6 +26,7 @@ The source is not limited to 60 seconds in this slice. The initial screen commun
 | `lib/features/clipper/clipper_page.dart` | Picker, selected path, loading/error state and player ownership |
 | `lib/features/clipper/widgets/empty_video_state.dart` | Initial guidance |
 | `lib/features/clipper/widgets/video_preview.dart` | Natural-ratio video, play/pause and playback position |
+| `lib/features/clipper/widgets/clip_range_selector.dart` | Start/end slider, boundary labels and selected duration |
 | `lib/features/clipper/format_duration.dart` | Duration display logic |
 | `test/` | Duration and widget behavior tests with native-platform fakes |
 | `integration_test/`, `test_driver/` | Real Android decoder smoke test and screenshot capture |
@@ -61,13 +62,13 @@ flutter drive -d emulator-5554 \
 
 The integration test substitutes **only the picker result** with a generated local file. It uses the real Android video player for initialization, dimensions, duration, play/pause, cancellation, corrupt-file recovery and replacement. Screenshots are written under `build/screenshots/`. This does **not** automate choosing a file inside Android's native picker; that needs the manual check below.
 
-Validated in this workspace on 29 September 2026: `flutter analyze` passed, all **13** unit/widget tests passed, the debug APK built, `flutter run` launched on the Pixel 8 / Android API 37 emulator, and the native decoder smoke test passed. Initial, preview and error screenshots were inspected. No physical-phone or native-picker end-to-end check has been performed.
+The preview foundation was validated on 29 September 2026 with the Pixel 8 / Android API 37 emulator and a native decoder smoke test. The range-selection slice was validated on 2 October 2026: `flutter analyze` passed, all **17** unit/widget tests passed, and the debug APK built. No physical-phone or native-picker end-to-end check has been performed.
 
 ### Manual device check
 
 1. Put an ordinary landscape MP4 on the device; include a source longer than 60 seconds.
-2. Open Choose video, select it in the native picker and check the duration against its metadata.
-3. Play/pause; background and return to the app. Confirm video is not stretched in either orientation.
+2. Open Choose video, select it in the native picker and check the source and default clip durations.
+3. Move both clip handles, confirm the preview seeks to each boundary, then play/pause. Background and return to the app. Confirm video is not stretched in either orientation.
 4. Open Change video and cancel; then select a second file. Confirm the old video stops and duration changes.
 5. Try a corrupt or unsupported local file, then recover by choosing the valid MP4 again.
 6. Repeat on a physical Android phone, including a large video and an actual gallery/document provider.
@@ -79,8 +80,8 @@ Validated in this workspace on 29 September 2026: `flutter analyze` passed, all 
 - The system picker may expose cloud providers; choose a video already on the phone for an offline demo. A provider that cannot produce a local path gets a clear retry message.
 - Selected paths may refer to plugin-managed cache. No persistent URI grants or saved sessions are implemented. Do not treat these paths as durable across restarts/cache cleanup.
 - Release builds currently use the debug signing key for this take-home prototype. A unique application ID and release signing setup are needed before distribution.
-- No seek/trim UI, caption, 9:16 conversion, FFmpeg, export or share sheet has been implemented.
+- The range UI records start and end positions but does not render a trimmed output yet. Caption, 9:16 conversion, FFmpeg, export and the share sheet remain unimplemented.
 
 ## Next processing step
 
-First add and test a start/end selection model with `0 ≤ start < end ≤ source duration` and a maximum 60-second range. Separately prove a maintained, Android-compatible FFmpeg integration on real devices with a tiny local fixture: trim → defined 9:16 crop/pad policy → escaped single-line caption → local output. Confirm codec availability, binary licensing, Android ABI/16 KB page support, cancellation and cleanup before connecting that pipeline to this screen. Export and sharing follow successful output verification.
+Next, separately prove a maintained, Android-compatible FFmpeg integration on real devices with a tiny local fixture: selected range → defined 9:16 crop/pad policy → escaped single-line caption → local output. Confirm codec availability, binary licensing, Android ABI/16 KB page support, cancellation and cleanup before connecting that pipeline to this screen. Export and sharing follow successful output verification.

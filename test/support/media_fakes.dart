@@ -49,6 +49,7 @@ class FakeVideoPlatform extends VideoPlayerPlatform {
   final events = <int, StreamController<VideoEvent>>{};
   final disposed = <int>[];
   final playing = <int, bool>{};
+  final seeks = <int, List<Duration>>{};
 
   @override
   Future<void> init() async {}
@@ -97,7 +98,9 @@ class FakeVideoPlatform extends VideoPlayerPlatform {
   Future<void> setPlaybackSpeed(int playerId, double speed) async {}
 
   @override
-  Future<void> seekTo(int playerId, Duration position) async {}
+  Future<void> seekTo(int playerId, Duration position) async {
+    seeks.putIfAbsent(playerId, () => []).add(position);
+  }
 
   @override
   Future<Duration> getPosition(int playerId) async => Duration.zero;
